@@ -15,16 +15,8 @@ on:
         options:
           - normal
           - zip
-      upload_target:
-        description: 'commit = push to repo (max ~90MB/file) | release = GitHub Release (up to 2GB/file, no splitting)'
-        required: false
-        type: choice
-        default: commit
-        options:
-          - commit
-          - release
       split_size:
-        description: 'Split size for large files when using commit mode (e.g. 90m, 95m). Ignored in release mode.'
+        description: 'Split size for large files (e.g. 90m, 95m)'
         required: false
         type: string
         default: '90m'
@@ -56,7 +48,6 @@ jobs:
         env:
           FILE_URLS: ${{ github.event.inputs.file_url }}
           MODE: ${{ github.event.inputs.mode }}
-          UPLOAD_TARGET: ${{ github.event.inputs.upload_target }}
           SPLIT_SIZE: ${{ github.event.inputs.split_size }}
           CONNECTIONS: ${{ github.event.inputs.connections }}
           CUSTOM_FILENAME: ${{ github.event.inputs.custom_filename }}
@@ -138,32 +129,28 @@ jobs:
             cd ..
             echo "Archive ready: downloads/$ARCHIVE_NAME"
           else
-            if [ "$UPLOAD_TARGET" = "commit" ]; then
-              NUMERIC=$(echo "$SPLIT_SIZE" | sed 's/[^0-9]//g')
-              UNIT=$(echo "$SPLIT_SIZE" | sed 's/[0-9]//g' | tr '[:upper:]' '[:lower:]')
-              if [ "$UNIT" = "g" ]; then
-                LIMIT_BYTES=$(( NUMERIC * 1024 * 1024 * 1024 ))
-              else
-                LIMIT_BYTES=$(( NUMERIC * 1024 * 1024 ))
-              fi
-
-              for FILE in tmp_downloads/*; do
-                [ -f "$FILE" ] || continue
-                SIZE=$(stat -c%s "$FILE")
-                BASENAME=$(basename "$FILE")
-
-                if [ "$SIZE" -gt "$LIMIT_BYTES" ]; then
-                  SIZE_MB=$(( SIZE / 1024 / 1024 ))
-                  echo "File $BASENAME is ${SIZE_MB}MB, splitting into ${SPLIT_SIZE} parts..."
-                  zip -s "$SPLIT_SIZE" "downloads/${BASENAME}.zip" -j "$FILE"
-                  echo "Split complete: $BASENAME"
-                else
-                  cp "$FILE" "downloads/$BASENAME"
-                fi
-              done
+            NUMERIC=$(echo "$SPLIT_SIZE" | sed 's/[^0-9]//g')
+            UNIT=$(echo "$SPLIT_SIZE" | sed 's/[0-9]//g' | tr '[:upper:]' '[:lower:]')
+            if [ "$UNIT" = "g" ]; then
+              LIMIT_BYTES=$(( NUMERIC * 1024 * 1024 * 1024 ))
             else
-              cp tmp_downloads/* downloads/
+              LIMIT_BYTES=$(( NUMERIC * 1024 * 1024 ))
             fi
+
+            for FILE in tmp_downloads/*; do
+              [ -f "$FILE" ] || continue
+              SIZE=$(stat -c%s "$FILE")
+              BASENAME=$(basename "$FILE")
+
+              if [ "$SIZE" -gt "$LIMIT_BYTES" ]; then
+                SIZE_MB=$(( SIZE / 1024 / 1024 ))
+                echo "File $BASENAME is ${SIZE_MB}MB, splitting into ${SPLIT_SIZE} parts..."
+                zip -s "$SPLIT_SIZE" "downloads/${BASENAME}.zip" -j "$FILE"
+                echo "Split complete: $BASENAME"
+              else
+                cp "$FILE" "downloads/$BASENAME"
+              fi
+            done
           fi
 
           rm -rf tmp_downloads
@@ -171,24 +158,7 @@ jobs:
           echo "Final files in downloads/:"
           ls -lh downloads/
 
-      - name: Upload to GitHub Release
-        if: ${{ github.event.inputs.upload_target == 'release' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="download-$(date +%Y%m%d-%H%M%S)"
-          TITLE="Downloaded Files - $(date '+%Y-%m-%d %H:%M:%S')"
-          NOTES="Workflow triggered download on $(date '+%Y-%m-%d %H:%M:%S')"
-
-          gh release create "$TAG" \
-            --title "$TITLE" \
-            --notes "$NOTES" \
-            downloads/*
-
-          echo "All files uploaded to GitHub Release: $TAG"
-
       - name: Commit and push to repository
-        if: ${{ github.event.inputs.upload_target == 'commit' || github.event.inputs.upload_target == '' }}
         run: |
           BRANCH="${GITHUB_REF_NAME}"
           git config user.name "github-actions"
